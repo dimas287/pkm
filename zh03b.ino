@@ -1,193 +1,141 @@
-#include <SD_ZH03B.h>
-#include <SoftwareSerial.h>
-#include <Wire.h>
-#include <RTClib.h>
-#include <LiquidCrystal_I2C.h>
-#include <ArduinoJson.h>
+from cvlib.object_detection import YOLO
+import cv2
+import time
+import serial
 
-// RTC_DS3231 rtc;
-// char daysOfTheWeek[7][12] = {"Ahad", "Senin", "Selasa", "Rabu", "Kamis", "Jum'at", "Sabtu"};
-// int jam, menit, detik;
-// int tanggal, bulan, tahun;
-// String hari;
-float ppm;
-int pm2_5, pm10, AQIco, AQIpm2_5, AQIpm10;
-String str;
-SoftwareSerial ZHSerial(3, 4); // RX, TX
-SoftwareSerial nodemcu(5,6);
-LiquidCrystal_I2C lcd(0x27,16,4);
-SD_ZH03B ZH03B( ZHSerial, SD_ZH03B::SENSOR_ZH03B );  // same as the line above
-// const int reedSwitchPin = 8; // Digital pin 13
-// volatile int tipCount = 0;    // Counter for tip events
-// volatile float conversionFactor = 0.5;
-// float rain=0;
-// unsigned long lastResetTime = 0; // Variable to store the last reset time
-// const unsigned long resetInterval = 86400000; // 1 minute in milliseconds
+# Inisialisasi komunikasi serial dengan Arduino (ganti 'COM3' atau '/dev/ttyUSB0' sesuai dengan port Anda)
+# arduino = serial.Serial('/dev/ttyACM0', 9600, timeout=1)
+time.sleep(2)  # Beri waktu untuk memastikan serial terhubung
 
-// void reedSwitchISR() {
-//   tipCount++; // Increment the tip count when the reed switch is triggered
-//   rain = tipCount * conversionFactor;
-//      lcd.clear(); 
-//   lcd.setCursor(1, 4);    // Set the cursor to the second line
-//   lcd.print("CRH_HJN:");   // Display a label
-//   lcd.print(rain);
-//   Serial.print("CRH_HJN:");   // Display a label
-//   Serial.print(rain);  
-//   lcd.setCursor(11,4);
-//   lcd.print("Tip:");   // Display a label
-//   lcd.print(tipCount); 
-//   Serial.print("Tip:");   // Display a label
-//   Serial.print(tipCount); 
-// }
+# Inisialisasi kamera
+cap = cv2.VideoCapture(0)  # Ganti 0 dengan 1 jika perlu
+weights = "/home/aurora/yolov4tinyrpi4-main/yolov4-tiny-custom_last.weights"
+config = "/home/aurora/yolov4tinyrpi4-main/yolov4-tiny-custom.cfg"
+labels = "/home/aurora/yolov4tinyrpi4-main/obj.names"
+count = 0
+frame_skip = 5  # Mengatur berapa banyak frame yang akan dilewati
+resize_width = 240  # Ukuran lebih kecil untuk pemrosesan lebih cepat
+resize_height = 180
 
-void getdata(){
-   if( ZH03B.readData() ) {
-   pm2_5 = ZH03B.getPM2_5();
-  pm10 = ZH03B.getPM10_0();
+# Inisialisasi YOLO hanya satu kali
+print("[INFO] Initializing YOLO ...")
+yolo = YOLO(weights, config, labels)
 
-    // Calculate AQI for PM2.5
-  double Iapm2_5, Ibpm2_5, Xxpm2_5, Xapm2_5, Xbpm2_5;
-  Xxpm2_5 = pm2_5;
-  if (pm2_5 >= 0 && pm2_5 <= 55.4) {
-    Iapm2_5 = 100;
-    Ibpm2_5 = 50;
-    Xapm2_5 = 55.4;
-    Xbpm2_5 = 15.4;
-  } else if (pm2_5 >= 55.5 && pm2_5 <= 150.4) {
-    Iapm2_5 = 200;
-    Ibpm2_5 = 100;
-    Xapm2_5 = 150.4;
-    Xbpm2_5 = 55.4;
-  } else if (pm2_5 >= 150.5 && pm2_5 <= 250.4) {
-    Iapm2_5 = 300;
-    Ibpm2_5 = 200;
-    Xapm2_5 = 250.4;
-    Xbpm2_5 = 150.4;
-  } else if (pm2_5 >= 500) {
-    Iapm2_5 = 500;
-    Ibpm2_5 = 300;
-    Xapm2_5 = 1000;
-    Xbpm2_5 = 500;
-  }
-  double ataspm2_5 = (Iapm2_5 - Ibpm2_5) * (pm2_5 - Xbpm2_5);
-  double bawahpm2_5 = (Xapm2_5 - Xbpm2_5);
-  int AQIpm2_5 = (ataspm2_5 / bawahpm2_5) + Ibpm2_5;
+# Fungsi untuk menggerakkan kamera berdasarkan lokasi bola
+def move_camera(balls_positions, width, bbox):
+    # Definisikan batas untuk masing-masing kotak
+    section_0_left = width // 4        # Kotak 0 (kiri)
+    section_1_right = width // 2        # Kotak 1 (tengah kiri)
+    section_2_left = section_1_right    # Kotak 2 (tengah kanan)
+    section_2_right = (3 * width) // 4  # Kotak 2 (tengah kanan)
+    
+    # Variabel untuk menyimpan status deteksi bola di tiap bagian
+    detected_sections = [False, False, False, False]
 
-   // Calculate AQI for PM10
-  double Iapm10, Ibpm10, Xxpm10, Xapm10, Xbpm10;
-  Xxpm10 = pm10;
-  if (pm10 >= 0 && pm10 <= 150) {
-    Iapm10 = 100;
-    Ibpm10 = 50;
-    Xapm10 = 150;
-    Xbpm10 = 50;
-  } else if (pm10 >= 151 && pm10 <= 350) {
-    Iapm10 = 200;
-    Ibpm10 = 100;
-    Xapm10 = 350;
-    Xbpm10 = 150;
-  } else if (pm10 >= 351 && pm2_5 <= 420) {
-    Iapm10 = 300;
-    Ibpm10 = 200;
-    Xapm10 = 420;
-    Xbpm10 = 350;
-  } else if (pm10 >= 500) {
-    Iapm10 = 500;
-    Ibpm10 = 300;
-    Xapm10 = 1000;
-    Xbpm10 = 500;
-  }
-  double ataspm10 = (Iapm10 - Ibpm10) * (pm10 - Xbpm10);
-  double bawahpm10 = (Xapm10 - Xbpm10);
-  int AQIpm10 = (ataspm10 / bawahpm10) + Ibpm10;
+    # Cek bounding box dari bola
+    for ball in bbox:
+        ball_left, ball_top, ball_right, ball_bottom = ball
 
+        # Tentukan di bagian mana bola berada
+        if ball_right > section_0_left and ball_left < section_1_right:
+            detected_sections[1] = True  # Kotak 1 terdeteksi
+        if ball_right > section_1_right and ball_left < section_2_right:
+            detected_sections[2] = True  # Kotak 2 terdeteksi
+        if ball_left >= section_2_right:
+            detected_sections[3] = True  # Kotak 3 terdeteksi
+        if ball_right <= section_0_left:
+            detected_sections[0] = True  # Kotak 0 terdeteksi
 
-    Serial.print("PM 2.5: ");
-    Serial.println(pm2_5);
-        Serial.print("PM 10: ");
-    Serial.println(pm10);
-          lcd.setCursor(7, 1);
-      lcd.print(pm2_5);
-      lcd.setCursor(7, 2);
-      lcd.print(pm10);
-            lcd.setCursor(10, 2);
-      lcd.print("AQI:");
-            lcd.setCursor(10, 1);
-      lcd.print("AQI:");
-                  lcd.setCursor(15, 2);
-      lcd.print(AQIpm10);
-            lcd.setCursor(15, 1);
-      lcd.print(AQIpm2_5);
-      
+    # Logika tambahan: Jika ada bola di kotak 1 dan 2, hitung jarak dan gerakkan kamera ke tengah
+    if detected_sections[1] and detected_sections[2]:
+        print("Bola di kotak 1 dan 2, menggerakkan kamera ke tengah bola")
+        
+        # Ambil bola yang berada di kotak 1 dan 2
+        ball1_center_x = ball2_center_x = None
+        for ball in bbox:
+            ball_left, ball_top, ball_right, ball_bottom = ball
+            center_x = (ball_left + ball_right) // 2  # Hitung titik tengah bola
+            
+            if ball_right > section_0_left and ball_left < section_1_right:  # Bola di kotak 1
+                ball1_center_x = center_x
+            if ball_right > section_1_right and ball_left < section_2_right:  # Bola di kotak 2
+                ball2_center_x = center_x
 
-           StaticJsonDocument<200> doc;
-  doc["a"] = pm2_5;
-  doc["b"] = pm10;
-  doc["c"] = AQIpm2_5;
-  doc["d"] = AQIpm10; 
-  // doc["e"] = rain;
+        # Pastikan kedua bola ditemukan
+        if ball1_center_x is not None and ball2_center_x is not None:
+            # Hitung posisi tengah antara kedua bola
+            middle_x = (ball1_center_x + ball2_center_x) // 2
+            print(f"Jarak horizontal antara bola 1 dan bola 2: {abs(ball1_center_x - ball2_center_x)}")
+            print(f"Menggerakkan kamera ke posisi tengah: {middle_x}")
+            # Kirim perintah ke Arduino untuk menggerakkan kamera ke posisi tengah
+            # arduino.write(f'm{middle_x}'.encode())
+        else:
+            print("Bola di kotak 1 dan 2 tidak lengkap")
+    
+    # Logika normal jika hanya ada satu bola di kotak 1 atau 2
+    elif detected_sections[1] or detected_sections[2]:
+        if detected_sections[1]:
+            print("Bola di kotak 1, belok kanan untuk menghindar")
+            # arduino.write(b'a')  # Kirim perintah untuk belok kiri
+        if detected_sections[2]:
+            print("Bola di kotak 2, belok kiri untuk menghindar")
+            # arduino.write(b'b')  # Kirim perintah untuk belok kanan
+    elif detected_sections[3]:  # Kotak 3 terdeteksi
+        print("Bola di kotak 3 (kanan), lurus")
+        # arduino.write(b'c')  # Kirim perintah untuk lurus
+    elif detected_sections[0]:  # Kotak 0 terdeteksi
+        print("Bola di kotak 0 (kiri), lurus")
+        # arduino.write(b'c')  # Kirim perintah untuk lurus
+    else:
+        print("Tidak ada bola terdeteksi, jalan lurus")
+        # arduino.write(b'c')  # Kirim perintah untuk stop atau lurus jika tidak ada bola
 
-  String jsonString;
-  serializeJson(doc, jsonString);
-  Serial.println(jsonString);
-  nodemcu.println(jsonString);
-   }
-}
+# Loop utama
+while True:
+    ret, img = cap.read()
+    if not ret:
+        print("Gagal mengambil gambar dari kamera.")
+        continue
 
-void setup() {
-//    pinMode(reedSwitchPin, INPUT_PULLUP); // Enable internal pull-up resistor
-// attachInterrupt(digitalPinToInterrupt(reedSwitchPin), reedSwitchISR, FALLING); // Attach ISR to the falling edge of the reed switch signal
-//   lastResetTime = millis();
-//    unsigned long currentTime = millis();
-//    if (currentTime - lastResetTime >= resetInterval) {
-//      // Reset the tipCount to zero
-//      tipCount = 0;
-//      rain = 0; 
-//         // Update the last reset time
-//      lastResetTime = currentTime;
-//    }
-    Serial.begin(9600);
-    nodemcu.begin(9600);
-    delay(1000);
-    Serial.println("program started");
-    Serial.println("-- Initializing ZH03B...");
-     ZHSerial.begin(9600);
-    delay(500);
-    ZH03B.setMode( SD_ZH03B::IU_MODE );
-    Serial.println("-- Reading ZH03B --");
-    delay(200);
-	  //Serial.print("sizeof frame(should be 24bytes): "); Serial.println( sizeof(union_t) );
-//  if (! rtc.begin()) {
-//     Serial.println("Couldn't find RTC");
-//     Serial.flush();
-//     while (1) delay(10);
-//   }
-    lcd.init();
-  lcd.backlight();
-  lcd.clear();
-  lcd.print("Air Quality:");
-  lcd.setCursor(0, 1);
-  lcd.print("PM2.5: ");
-  lcd.setCursor(0, 2);
-  lcd.print("PM10: ");
-  lcd.setCursor(0, 3);
-}
+    count += 1
+    if count % frame_skip != 0:  # Hanya proses setiap frame ke-5
+        continue
 
+    # Resize gambar untuk mempercepat pemrosesan
+    img = cv2.resize(img, (resize_width, resize_height))  # Ukuran lebih kecil untuk pemrosesan lebih cepat
 
-void loop () {
-  // DateTime now = rtc.now();
-  // jam     = now.hour();
-  // menit   = now.minute();
-  // detik   = now.second();
-  // tanggal = now.day();
-  // bulan   = now.month();
-  // tahun   = now.year();
-  // hari    = daysOfTheWeek[now.dayOfTheWeek()];
-  // Serial.println(String() + hari + ", " + tanggal + "-" + bulan + "-" + tahun);
-  // Serial.println(String() + jam + "." + menit + "-" + tahun);
-  // Serial.println();
-  delay(1000);
- getdata();
-//  delay(3000);
+    # Deteksi objek menggunakan YOLO
+    bbox, label, conf = yolo.detect_objects(img)
+    
+    # Variabel untuk menyimpan koordinat bola hijau dan merah
+    balls_positions = []  # Daftar untuk menyimpan posisi tengah bola
 
-}
+    # Loop melalui label yang terdeteksi
+    for i, lbl in enumerate(label):
+        if lbl == "0" or lbl == "1":  # Deteksi bola hijau atau bola merah
+            ball = bbox[i]
+            balls_positions.append(ball)
+
+    height, width, _ = img.shape
+
+    # Jika ada bola yang terdeteksi, gerakkan kamera
+    if bbox:  # Periksa apakah ada bounding box
+        move_camera(balls_positions, width, bbox)
+    else:
+        print("Tidak ada bola terdeteksi, jalan lurus")
+
+    # Gambar garis vertikal untuk mewakili kotak
+    num_sections = 4  # Jumlah kotak yang diinginkan
+    for i in range(1, num_sections):
+        x = i * width // num_sections
+        cv2.line(img, (x, 0), (x, height), (0, 0, 0), 2)  # Garis vertikal
+
+    # Tampilkan gambar
+    cv2.imshow("img1", img)
+
+    if cv2.waitKey(1) & 0xFF == 27:  # Tekan 'ESC' untuk keluar
+        break
+
+# Tutup kamera dan jendela
+cap.release()
+cv2.destroyAllWindows()
